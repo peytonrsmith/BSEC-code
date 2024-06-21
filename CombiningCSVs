@@ -4,3 +4,51 @@ import io
 #download files as zip from google drive and then put in name of zip file where says zip_file_path
 zip_file_path = 'daily average-20240620T144048Z-001.zip'  # Change this to your ZIP file path
 output_csv_path = 'ThroughJunetemphighs20.csv'  # Name of the output file needs to be changed each time run
+# Initialize an empty list to hold pivoted dataframes
+pivoted_dfs = []
+
+# Initialize an empty list to hold all dates
+all_dates = []
+
+# Open the ZIP file
+with zipfile.ZipFile(zip_file_path, 'r') as z:
+    # Loop through each file in the ZIP archive
+    for file_name in z.namelist():
+        if file_name.endswith('.csv'):
+            # Read the CSV file into a pandas DataFrame
+            with z.open(file_name) as f:
+                df = pd.read_csv(f)
+                
+                # Convert the obsTimeUtc to datetime format
+                df['obsTimeUtc'] = pd.to_datetime(df['obsTimeUtc'])
+                
+                # Append dates to the all_dates list
+                all_dates.extend(df['obsTimeUtc'].unique())
+                
+                # Pivot the DataFrame to have dates as rows and station IDs as columns 
+                #chnage these values to what you want to look at 
+                pivoted_df = df.pivot(index='obsTimeUtc', columns='stationID', values='tempHigh')
+                
+                # Append the pivoted DataFrame to the list
+                pivoted_dfs.append(pivoted_df)
+
+# Get the complete date range
+complete_date_range = pd.date_range(start=min(all_dates), end=max(all_dates), freq='D')
+
+# Reindex all pivoted DataFrames to the complete date range
+reindexed_dfs = []
+for pivoted_df in pivoted_dfs:
+    reindexed_df = pivoted_df.reindex(complete_date_range)
+    reindexed_dfs.append(reindexed_df)
+
+# Fill missing values, if desired (e.g., forward fill or NaN)
+filled_dfs = [df.ffill() for df in reindexed_dfs]
+
+# Concatenate all reindexed and filled DataFrames into a single DataFrame
+concatenated_df = pd.concat(filled_dfs, axis=1)
+
+# Save the concatenated DataFrame to a new CSV file
+concatenated_df.to_csv(output_csv_path, index_label='obsTimeUtc')
+
+# Confirmation message
+print(f"Concatenated DataFrame saved to {output_csv_path}")

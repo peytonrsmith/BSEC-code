@@ -1,0 +1,6 @@
+import pandas as pd
+import zipfile
+import io
+#download files as zip from google drive and then put in name of zip file where says zip_file_path
+zip_file_path = 'daily average-20240620T144048Z-001.zip'  # Change this to your ZIP file path
+output_csv_path = 'ThroughJunetemphighs20.csv'  # Name of the output file needs to be changed each time run

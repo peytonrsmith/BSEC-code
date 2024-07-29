@@ -31,7 +31,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-from Tkinter import *
+from tkinter import *
 
 #from tools.labeler.MenuFrame  import MenuFrame
 from tools.labeler.MenuBar  import MenuBar

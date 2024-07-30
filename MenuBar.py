@@ -33,7 +33,7 @@
 
 import tkinter
 import subprocess
-import tkMessageBox
+import MessageBox
 import webbrowser
 import os
 from tkinter import *

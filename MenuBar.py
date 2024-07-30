@@ -31,12 +31,12 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-import Tkinter
+import tkinter
 import subprocess
 import tkMessageBox
 import webbrowser
 import os
-from Tkinter import *
+from tkinter import *
 
 from tools.serial.tools.list_ports import *
 from tools.labeler.Handler import Handler

@@ -1,0 +1,194 @@
+---
+title: "Analysis for 'Filling the urban measurement desert' paper"
+author:
+  - Peyton Smith
+  - Michael Bader
+  - Darryn Waugh
+output: bookdown::html_document2
+---
+
+# Overview
+
+This file replicates demographic analyses for the paper "Filing the urban measurement gap: The Baltimore community-based weather station network." 
+
+# Set Environment and Load Data
+
+Load necessary libraries and report version used.
+
+```{r setup}
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(terra)
+
+c("tidyverse", "tidycensus", "sf", "terra") %>% 
+  set_names() %>% 
+  map(packageVersion)
+
+```
+
+## Weather Station Data
+
+Load data on locations of weather stations. Table \@ref(tab:dta-src) reports what is included in each file. In all files, the variables `latitude` and `longitude` record the latitude and longitude of the station. 
+
+Table: (\#tab:dta-src) Weather station data file names and data description
+
+File                                               Data
+-------------------------------------------------  ------------------------------------
+`BSEC weather stations locations.csv`              Location, site, and station information for BSEC weather stations
+`Private Weather Stations in Baltimore Area.csv`   Location information about private weather stations obtained from Weather Underground
+`Government Stations.csv`                          Location of National Weather Service stations
+
+We load each file into a list and then convert the data frame in each file to a spatial data frame of points based on the latitude and longitude. 
+
+```{r station-data}
+## Import weather station data
+dtadir <- "../data/src"
+dta_fnames <- c(
+    bsec = "BSEC weather stations locations.csv",
+    govt = "Government Stations.csv",
+    prvt = "Private Weather Stations in Baltimore Area.csv"
+)
+
+dta_stations <- map(
+    dta_fnames, 
+    \(x) {
+        file.path(dtadir, x) %>% 
+            read_csv() %>% 
+            rename_all(~ str_to_lower(.))
+    }
+)
+
+## Convert long/lat to sf object with spatial references
+dta_staxy <- map(
+    dta_stations, 
+    \(x) st_as_sf(x, coords = c("longitude", "latitude"), crs = 4326)
+)
+
+```
+
+## American Community Survey (ACS) Data
+
+We use the `tidycensus` package to load data regarding racial/ethnic composition and poverty status among census tracts for Baltimore City. We downloaded data from the the 2018-2022 ACS variables at the tract level. 
+
+The variables included in the data are:
+
+Table: (\#tab:acsvars) American Community Survey variables
+
+Variable       ACS Cell    Description
+-------------- ----------- ---------------------------------------------------
+`acs_tot`      B03002_001  Total population
+`acs_hsp`      B03002_012  Number of Hispanic residents (of any race)
+`acs_nhw`      B03002_003  Number of non-Hispanic white residents
+`acs_nhb`      B03002_004  Number of non-Hispanic black residents
+`acs_pvk`      B17020_001  Total population with known poverty status
+`acs_pov`      B17020_002  Number of people below the poverty line
+`acs_npv`      B17020_010  Number of people at or above the poverty line
+
+After downloading the data, we create weights for each group that reflect the proportion of the group population in that tract. 
+
+```{r acs-data, echo=FALSE}
+## Obtain 2018-2022 ACS 5-year estimates by tract for Baltimore City
+acsvars <- c(
+    acs_tot = "B03002_001E",
+    acs_hsp = "B03002_012E", 
+    acs_nhw = "B03002_003E", 
+    acs_nhb = "B03002_004E",
+    acs_pvk = "B17020_001E",
+    acs_pov = "B17020_002E",
+    acs_npv = "B17020_010E"
+)
+
+yr = 2022
+dta_trt <- get_acs(
+    year = yr,
+    geography = "tract",
+    state = "MD",
+    county = "510",
+    variables = unname(acsvars),
+    geometry = TRUE,
+    output = "wide",
+    cache_table = TRUE
+) %>% 
+    rename(all_of(acsvars)) %>% 
+    select(c(GEOID, all_of(names(acsvars)))) %>% 
+    mutate(across(
+        starts_with("acs"), list(sum = ~sum(.), wgt = ~ . / sum(.))
+    )) 
+
+```
+
+Test that the weights sum to 1 for each group. 
+
+```{r weight-sum}
+## Test that weights sum to 1
+dta_trt %>% st_drop_geometry() %>% summarize(across(ends_with("wgt"), sum))
+
+```
+
+# Weighted Distance to Nearest Station
+
+The code in this section produces Table 1 in the paper. 
+
+## Calculate Distances
+
+We then calculate the distance from each tract centroid (which we obtain using the function `st_centroid()`) to the nearest weather station of each type and record these variables. 
+
+```{r centroid-distance}
+## Obtain tract centroids
+dta_trtxy <- dta_trt %>% 
+    st_centroid() %>% 
+    st_transform(4326) %>% 
+    st_geometry()
+
+## Create datasets of indexes of nearest station by type and calculate distances
+idxs <- map_df(dta_staxy, \(x) st_nearest_feature(dta_trtxy, x)) %>% 
+    as_tibble() %>% 
+    rename_all(~ paste0("idx_", .))
+dists <- map2(dta_staxy, idxs, \(d, i) {
+    st_distance(dta_trtxy, d[i, ], by_element = TRUE)
+}) %>% 
+    as_tibble() %>% 
+    rename_all(~ paste0("d_", .))
+```
+
+## Create Weighted Distance Table
+
+Next we calculate the weighted distance by multiplying the weight representing the proportion of all Baltimore residents within the group who reside in the tract by the distance to the nearest weather station of each type. 
+
+```{r weighted-distance}
+## Calculate weighted distances for all groups by all station types
+dta_typetrt <- dta_trt %>% 
+    bind_cols(idxs, dists) %>% 
+    pivot_longer(
+        matches("^[idx_|d_]"),
+        names_pattern = "(.+)_(.+)",
+        names_to = c(".value", "wstype")
+    ) %>% 
+    mutate(
+        d = as.numeric(d),
+        across(
+            ends_with("wgt"), list(wgtdist = ~ . * d)
+        )
+    ) 
+```
+
+Finally, we sum over each group by each type of weather station (recall that the sum of weights equals 1 by design, so the sum equals the average weighted distance). We then save the table in the file `out/tbl/population-weighted-distance-race.csv`. 
+
+```{r weighted-distance-table}
+## Sum over groups and station types and create table
+tbl_popdist <- dta_typetrt%>% 
+    group_by(wstype) %>% 
+    summarize(across(
+        .cols = ends_with("wgtdist"), list(popdist = ~ sum(.))
+    )) %>% 
+    ungroup() %>% 
+    rename_all(
+        ~ str_replace(., "acs_(...).+_popdist", "\\1")
+    )
+tbl_popdist
+
+tbl_popdist %>% 
+    st_drop_geometry() %>% 
+    write_csv("out/tbl/population-weighted-distance-race.csv")
+```

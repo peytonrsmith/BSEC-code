@@ -1,0 +1,37 @@
+---
+title: "Poverty Distribution Baltimore"
+author: Peyton Smith
+---
+Overview 
+This file looks the distribution of poverty in Baltimore across census tracts
+```{r setup}
+library(tidycensus)
+library(tidyverse)
+```
+
+Loading Census Data 
+```{r acs-data, echo=FALSE}
+poverty_var <- "B17021_002E" 
+
+baltimore_poverty <- get_acs(
+  geography = "tract",
+  state = "MD",
+  county = "Baltimore city",
+  variables = poverty_var,
+  year = 2022, 
+  output = "wide"
+)
+baltimore_poverty <- baltimore_poverty %>%
+  rename(poverty_population = B17021_002E)
+```
+
+```{r, echo=False}
+ggplot(baltimore_poverty, aes(x = poverty_population)) +
+  geom_histogram(binwidth = 100, color = "black", alpha = 0.7) +
+  labs(
+    title = "Distribution of Poverty Across Census Tracts in Baltimore",
+    x = "Population Below Poverty Level",
+    y = "Number of Census Tracts"
+  ) 
+```
+

@@ -1,0 +1,319 @@
+---
+title: "Histogram Calculations for 'Filling the urban measurement desert' paper"
+author:
+  - Peyton Smith
+  - Michael Bader
+  - Darryn Waugh
+output: html_document
+date: "2025-02-23"
+---
+```{r setup}
+library(dplyr)
+library(tidycensus)
+library(sf)
+library(readr)
+library(tigris)
+library(purrr)
+library(ggplot2)
+library(tidyr)
+library(ggmap)
+
+```
+This function determines which weather station is in each census block and the percent of Black people there as well as amount of poverty. 
+```{r function to join data points and census information}
+process_weather_stations <- function(coord_data = NULL, file_paths = NULL) {
+  
+  # Retrieve Baltimore census tracts
+  baltimore_tracts <- tracts(state = "MD", year = 2022, cb = TRUE) %>%
+    st_transform(crs = 4326)
+  
+
+  acs_data <- get_acs(
+    geography = "tract",
+    state = "MD",
+    year = 2022,
+    variables = c(
+      total_population = "B03002_001E",   # Total population
+      black_population = "B03002_004E",   # Black population
+      total_poverty = "B17001_001E",      # Total population for poverty calculation
+      in_poverty = "B17001_002E"          # People below the poverty line
+    ),
+    output = "wide"
+  ) %>%
+    mutate(
+      GEOID = as.character(GEOID),
+      pct_black = ifelse(total_population > 0, (black_population / total_population) * 100, NA),
+      pct_poverty = ifelse(total_poverty > 0, (in_poverty / total_poverty) * 100, NA)  
+    ) %>%
+    select(GEOID, pct_black, pct_poverty)
+  
+  # Function to process a coordinate list
+  process_coord_list <- function(coord_df) {
+    # Convert coordinates to spatial object
+    coord_sf <- st_as_sf(coord_df, coords = c("long", "lat"), crs = 4326)
+    
+    # Assign GEOIDs via spatial join
+    coord_with_geoid <- st_join(coord_sf, baltimore_tracts %>% select(GEOID)) %>%
+      st_drop_geometry()
+    
+    # Merge GEOIDs with ACS data
+    merged_data <- coord_df %>%
+      mutate(GEOID = as.character(coord_with_geoid$GEOID)) %>%
+      left_join(acs_data, by = "GEOID")
+    
+    return(merged_data)
+  }
+  
+  # Function to process CSV files
+  process_file <- function(file_path) {
+    # Load weather station data
+    weather_stations <- read_csv(file_path) %>%
+      select(-starts_with("..."))  # Remove empty placeholder columns
+    
+    # Convert to spatial object
+    coord_sf <- st_as_sf(weather_stations, coords = c("Longitude", "Latitude"), crs = 4326)
+    
+    # Assign GEOIDs via spatial join
+    coord_with_geoid <- st_join(coord_sf, baltimore_tracts %>% select(GEOID)) %>%
+      st_drop_geometry()
+    
+    # Merge with ACS data
+    merged_data <- weather_stations %>%
+      mutate(GEOID = as.character(coord_with_geoid$GEOID)) %>%
+      left_join(acs_data, by = "GEOID")
+    
+    return(merged_data)
+  }
+  
+  # Process data
+  results <- list()
+  
+  if (!is.null(coord_data)) {
+    results[["coord_data"]] <- process_coord_list(coord_data)
+  }
+  
+  if (!is.null(file_paths)) {
+    file_results <- lapply(file_paths, process_file)
+    results[["file_data"]] <- do.call(rbind, file_results)
+  }
+  
+  
+  final_data <- do.call(rbind, results)
+  write_csv(final_data, output_filename)
+  
+  return(final_data)
+}
+```
+This was the only way that I could get this to work but there is certainly a way more efficient way to do this
+```{r}
+coord_private <- data.frame(
+  lat = c(39.3066, 39.27774, 39.37076, 39.23659, 39.28932, 39.37075, 39.29284, 39.35418, 39.34353, 39.34326, 39.32448, 39.27997, 39.35017, 39.37398, 39.28431, 39.28883, 39.28641, 39.32964, 39.35693, 39.27108, 39.37521, 39.28172, 39.35859, 39.35362, 39.33919, 39.28694, 39.37499, 39.35597, 39.2981, 39.373, 39.263, 39.286, 39.323, 39.374, 39.327, 39.364, 39.282, 39.285, 39.37, 39.364, 39.367, 39.379, 39.277, 39.282, 39.284, 39.287, 39.291, 39.28988, 39.283, 39.355, 39.37312, 39.222, 39.29, 39.346, 39.308, 39.326, 39.431, 39.329, 39.216, 39.365, 39.21022, 39.34, 39.407, 39.255, 39.28545, 39.26657, 39.27674, 39.37, 39.275, 39.279, 39.376, 39.296, 39.399, 39.281, 39.273, 39.265, 39.24718, 39.32241, 39.358, 39.354, 39.404, 39.374, 39.27197, 39.388, 39.37649, 39.406, 39.27502, 39.284, 39.242, 39.253, 39.416, 39.24517, 39.232, 39.27115, 39.416, 39.397, 39.374, 39.28, 39.34929, 39.282, 39.33462, 39.27459, 39.27314, 39.284, 39.356, 39.277, 39.283, 39.36274, 39.363, 39.333, 39.283, 39.331, 39.35939, 39.368, 39.365, 39.3784, 39.33791, 39.27179, 39.206, 39.28054, 39.27734, 39.27163, 39.2694, 39.25722, 39.26991, 39.2679, 39.29858, 39.27499, 39.2758, 39.26337, 39.27765, 39.27545, 39.30305, 39.273, 39.27, 39.267, 39.29858, 39.29858, 39.279, 39.27, 39.27, 39.278, 39.252, 39.29727, 39.282, 39.168, 39.24244, 39.2631, 39.259, 39.255, 39.25556, 39.24245, 39.21241, 39.22838, 39.20838, 39.20853, 39.19879, 39.20827, 39.199, 39.208, 39.203, 39.205, 39.204, 39.18422, 39.192, 39.194, 39.19849, 39.244, 39.23431, 39.23171, 39.22, 39.19717, 39.23962, 39.23219, 39.304, 39.304, 39.306, 39.30438, 39.30453, 39.308, 39.33112, 39.2989, 39.27923, 39.44815, 39.43692, 39.44809, 39.44053, 39.172, 39.14974, 39.157, 39.1478, 39.15, 39.18831, 39.18819, 39.171, 39.169, 39.18447, 39.175, 39.186, 39.147, 39.188, 39.19111, 39.17276, 39.16566, 39.16164, 39.20126, 39.15634, 39.1682, 39.154, 39.162, 39.177, 39.16, 39.44364, 39.33, 39.229, 39.232, 39.22699, 39.146, 39.174, 39.13685, 39.19471, 39.14222, 39.171, 39.166, 39.166, 39.166, 39.452, 39.24014, 39.197, 39.19962, 39.204, 39.2176, 39.21853, 39.32285, 39.44688, 39.42878, 39.442, 39.42687, 39.429, 39.448, 39.434, 39.39772, 39.17034, 39.14556, 39.35497, 39.315, 39.317, 39.34745, 39.416, 39.36643, 39.418, 39.41264, 39.397, 39.4373, 39.39763, 39.437, 39.422, 39.422, 39.44, 39.451, 39.461, 39.43464, 39.434, 39.41253, 39.377, 39.396, 39.388, 39.382, 39.395, 39.414, 39.395, 39.398, 39.378, 39.389, 39.382, 39.38, 39.415, 39.411, 39.416, 39.151, 39.129, 39.15, 39.15, 39.152, 39.15, 39.15, 39.161, 39.166, 39.13797, 39.1503, 39.15547, 39.161, 39.41149, 39.417, 39.41803, 39.411, 39.419, 39.413, 39.403, 39.383, 39.418, 39.39703, 39.368, 39.38165, 39.39095, 39.372, 39.36459, 39.462, 39.23952, 39.33519, 39.35387, 39.359, 39.363, 39.331, 39.25605, 39.141, 39.143, 39.138, 39.151, 39.13826, 39.273, 39.245, 39.255, 39.256, 39.256, 39.227, 39.214, 39.24505, 39.245, 39.40651, 39.37373, 39.43011, 39.445, 39.44, 39.41708, 39.42168, 39.39858, 39.38448, 39.399, 39.41411, 39.403, 39.388, 39.43, 39.41428, 39.407, 39.397, 39.409, 39.423, 39.388, 39.39, 39.39, 39.418, 39.415, 39.4117, 39.376, 39.378),
+  long = c(-76.48448, -76.69485, -76.6565, -76.69712, -76.70229, -76.66317, -76.58381, -76.51258, -76.52314, -76.53079, -76.64006, -76.61694, -76.50096, -76.68687, -76.58223, -76.56825, -76.58504, -76.6676, -76.52321, -76.56985, -76.5818, -76.59278, -76.55515, -76.69367, -76.6436, -76.58482, -76.65949, -76.56007, -76.6047, -76.592, -76.608, -76.555, -76.625, -76.585, -76.573, -76.672, -76.569, -76.571, -76.618, -76.669, -76.656, -76.668, -76.609, -76.571, -76.585, -76.702, -76.593, -76.71563, -76.593, -76.551, -76.68442, -76.594, -76.598, -76.572, -76.628, -76.63, -76.557, -76.422, -76.608, -76.478, -76.62266, -76.637, -76.516, -76.449, -76.76965, -76.76067, -76.75531, -76.606, -76.608, -76.569, -76.696, -76.615, -76.53, -76.608, -76.768, -76.758, -76.6216, -76.61535, -76.619, -76.583, -76.642, -76.541, -76.60884, -76.564, -76.76174, -76.507, -76.59071, -76.576, -76.64, -76.642, -76.484, -76.73433, -76.708, -76.45073, -76.484, -76.504, -76.642, -76.71, -76.57334, -76.595, -76.6512, -76.6157, -76.60976, -76.575, -76.56, -76.615, -76.565, -76.60727, -76.606, -76.647, -76.581, -76.611, -76.66918, -76.657, -76.66236, -76.6067, -76.61106, -76.5949, -76.633, -76.73603, -76.72768, -76.72537, -76.7447, -76.73252, -76.77394, -76.75871, -76.75717, -76.76696, -76.75741, -76.74286, -76.71497, -76.72761, -76.76523, -76.746, -76.76, -76.757, -76.75718, -76.75717, -76.747, -76.725, -76.741, -76.722, -76.725, -76.77021, -76.776, -76.526, -76.52285, -76.52151, -76.466, -76.533, -76.47328, -76.52292, -76.44441, -76.75846, -76.75676, -76.75603, -76.74548, -76.76329, -76.773, -76.769, -76.752, -76.728, -76.74, -76.75747, -76.74, -76.789, -76.78288, -76.775, -76.76991, -76.7762, -76.776, -76.78306, -76.78207, -76.77284, -76.466, -76.466, -76.485, -76.46579, -76.46583, -76.424, -76.46639, -76.41838, -76.58965, -76.52129, -76.4761, -76.5212, -76.48937, -76.567, -76.64242, -76.534, -76.56242, -76.642, -76.6401, -76.63997, -76.594, -76.569, -76.6432, -76.609, -76.643, -76.566, -76.638, -76.6279, -76.6009, -76.60208, -76.64064, -76.59946, -76.5339, -76.57419, -76.566, -76.602, -76.56, -76.592, -76.76794, -76.687, -76.707, -76.68, -76.69956, -76.718, -76.751, -76.74367, -76.72082, -76.71057, -76.795, -76.795, -76.795, -76.795, -76.438, -76.64994, -76.66, -76.67, -76.65, -76.65481, -76.64614, -76.72902, -76.66185, -76.59935, -76.638, -76.60807, -76.645, -76.699, -76.634, -76.77776, -76.5224, -76.68708, -76.42785, -76.418, -76.43, -76.80835, -76.49, -76.5336, -76.497, -76.48408, -76.462, -76.79792, -76.7606, -76.7818, -76.734, -76.734, -76.769, -76.787, -76.745, -76.7187, -76.719, -76.51385, -76.532, -76.495, -76.567, -76.554, -76.542, -76.522, -76.505, -76.533, -76.522, -76.556, -76.544, -76.522, -76.518, -76.533, -76.538, -76.466, -76.464, -76.511, -76.517, -76.532, -76.465, -76.503, -76.533, -76.513, -76.442, -76.53088, -76.50744, -76.523, -76.44448, -76.436, -76.48853, -76.444, -76.449, -76.484, -76.443, -76.491, -76.441, -76.73705, -76.725, -76.76723, -76.74548, -76.804, -76.81035, -76.717, -76.70795, -76.50334, -76.47306, -76.475, -76.463, -76.499, -76.53471, -76.67, -76.658, -76.733, -76.69, -76.70309, -76.611, -76.441, -76.449, -76.45, -76.45, -76.439, -76.474, -76.45292, -76.453, -76.69761, -76.60039, -76.63306, -76.619, -76.622, -76.59547, -76.55891, -76.57014, -76.59698, -76.598, -76.5879, -76.619, -76.611, -76.566, -76.55903, -76.572, -76.628, -76.649, -76.565, -76.6, -76.583, -76.583, -76.595, -76.65118, -76.64232, -76.419, -76.48)
+)
+coord_BSEC <- data.frame(
+  lat = c(39.34458, 39.47938695, 39.35595, 39.3280249, 39.30739, 39.224924, 39.32623, 39.311524,
+          39.47881656, 39.29665687, 39.31142523, 39.47938695, 39.20874, 39.3280249, 39.32678229,
+          39.28177, 39.29136, 39.315751, 39.365163, 39.31142523, 39.32725072, 39.29824847, 
+          39.20874, 39.47881656, 39.30189, 39.3164051, 39.225, 39.28419032, 39.28836036, 
+          39.3205044, 39.34164, 39.3333, 39.30103329, 39.32623, 39.385, 39.30515919),
+  long = c(-76.58414, -76.70642217, -76.635, -76.6237767, -76.69507, -76.591877, -76.682453, 
+           -76.587952, -76.70565468, -76.58753858, -76.60079713, -76.70642217, -76.92888, 
+           -76.6237767, -76.67794408, -76.699293, -76.636494, -76.617652, -76.627381, 
+           -76.60079713, -76.6114758, -76.58285827, -76.92888, -76.70565468, -76.62813, 
+           -76.6828954, -76.5985962, -76.76726735, -76.67103026, -76.62473831, -76.68276, 
+           -76.660578, -76.54511695, -76.682453, -76.7063869, -76.58579041)
+)
+
+coord_private_sf <- st_as_sf(coord_private, coords = c("long", "lat"), crs = 4326)
+coord_BSEC_sf <- st_as_sf(coord_BSEC, coords = c("long", "lat"), crs = 4326)
+
+
+```
+Running the points above in the function  
+```{r}
+#private weather stations 
+processed_private_coords <- process_weather_stations(coord_data = coord_private_sf)
+print(processed_private_coords)
+#BSEC weather stations 
+processed_BSEC_coords <- process_weather_stations(coord_data = coord_BSEC_sf)
+print(processed_BSEC_coords)
+```
+Now that it's been determined which tract each weather station is in and the demographic of that tract histograms of these tracts can be created. 
+```{r}
+categorize_percentage <- function(value, category_type) {
+  if (category_type == "poverty") {
+    case_when(
+      value < 5 ~ "Below 5%",
+      value >= 5 & value < 15 ~ "5-14.99%",
+      value >= 15 & value < 30 ~ "15–29.99%",
+      value >= 30 & value < 50 ~ "30–49.99%",
+      value >= 50 ~ "Above 50%"
+    )
+  } else if (category_type == "race") {
+    case_when(
+      value < 10 ~ "Below 10%",
+      value >= 10 & value < 40 ~ "10–39.9%",
+      value >= 40 & value < 70 ~ "40–69.9%",
+      value >= 70 & value < 90 ~ "70–89.9%",
+      value >= 90 ~ "Above 90%"
+    )
+  }
+}
+
+plot_distribution_histogram <- function(private_data, bsec_data, variable, category_type) {
+  
+   private_data <- private_data %>% mutate(Value = .data[[variable]])
+   bsec_data <- bsec_data %>% mutate(Value = .data[[variable]])
+   
+   private_data <- private_data %>% filter(!is.na(Value))
+   bsec_data <- bsec_data %>% filter(!is.na(Value))
+  
+
+  
+  private_data$type <- "Private Weather Stations"
+  bsec_data$type <- "BSEC Weather Stations"
+  
+  # Apply categorization 
+  private_data$Category <- factor(
+    categorize_percentage(private_data$Value, category_type), 
+    levels = if (category_type == "poverty") {
+      c("Below 5%", "5-14.99%", "15–29.99%", "30–49.99%", "Above 50%")
+    } else {
+      c("Below 10%", "10–39.9%", "40–69.9%", "70–89.9%", "Above 90%")
+    }
+  )
+  
+  bsec_data$Category <- factor(
+    categorize_percentage(bsec_data$Value, category_type), 
+    levels = if (category_type == "poverty") {
+      c("Below 5%", "5-14.99%", "15–29.99%", "30–49.99%", "Above 50%")
+    } else {
+      c("Below 10%", "10–39.9%", "40–69.9%", "70–89.9%", "Above 90%")
+    }
+  )
+  
+  # Combine datasets
+  combined_data <- bind_rows(private_data, bsec_data)
+  
+
+  summary_data <- combined_data %>%
+    group_by(type, Category) %>%
+    summarise(Count = n(), .groups = "drop") %>%
+    group_by(type) %>%
+    mutate(Percentage = (Count / sum(Count)) * 100) %>%
+    filter(!is.na(Category))  # **Ensures NA column is removed**
+  
+  
+  plot_title <- if (category_type == "poverty") {
+    "Distribution of Weather Stations by Percentage of Population in Poverty"
+  } else {
+    "Distribution of Weather Stations by Percentage of Non-Hispanic Black Residents"
+  }
+  
+  x_label <- if (category_type == "poverty") {
+    "Percentage of Population in Poverty"
+  } else {
+    "Percentage of Non-Hispanic Black Residents"
+  }
+  
+  # Create grouped bar plot 
+  ggplot(summary_data, aes(x = Category, y = Percentage, fill = type)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = c("Private Weather Stations" = "black", "BSEC Weather Stations" = "red")) +
+    labs(
+      title = plot_title,
+      x = x_label,
+      y = "Percentage of Stations",
+      fill = "Station Type"
+    ) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5))  # Keep x-axis labels readable
+}
+```
+Input of values and creation of graphs.  
+
+```{r}
+# Poverty Distribution 
+plot_distribution_histogram(
+  private_data = processed_private_coords,
+  bsec_data = processed_BSEC_coords,
+  variable = "pct_poverty",
+  category_type = "poverty"
+)
+
+# Race Distribution 
+plot_distribution_histogram(
+  private_data = processed_private_coords,
+  bsec_data = processed_BSEC_coords,
+  variable = "pct_black",
+  category_type = "race"
+)
+
+```
+Now adding map to show station locations based on race. 
+```{r}
+#needs to get deleted before code can be published 
+register_google(key = "AIzaSyCaTlNyemrm-Cmj3DJhOdxKDPvn2eq-c4Q", write = TRUE)
+
+baltimore_tracts <- tracts(state = "MD", county = "Baltimore city", year = 2022, cb = TRUE) %>%
+  st_transform(crs = 4326)
+
+# Merge ACS data with spatial tracts
+acs_black_data <- get_acs(
+  geography = "tract",
+  state = "MD",
+  county = "Baltimore city",
+  year = 2022,
+  variables = c(total_population = "B03002_001E", black_population = "B03002_004E"),
+  output = "wide"
+) %>%
+  mutate(GEOID = as.character(GEOID), pct_black = (black_population / total_population) * 100)
+
+baltimore_tracts <- baltimore_tracts %>%
+  left_join(acs_black_data, by = "GEOID")
+
+# Define the center of the map
+expanded_center <- c(lon = mean(st_coordinates(st_centroid(baltimore_tracts))[, 1]), 
+                     lat = mean(st_coordinates(st_centroid(baltimore_tracts))[, 2]))
+
+# Get Google Maps street view background
+google_map <- get_googlemap(
+  center = expanded_center,
+  zoom = 11,
+  maptype = "roadmap"
+)
+
+# Convert Weather Stations to SF objects
+bsec_stations <- st_as_sf(processed_BSEC_coords, coords = c("long", "lat"), crs = 4326)
+private_stations <- st_as_sf(processed_private_coords, coords = c("long", "lat"), crs = 4326)
+
+# Plot percentage Black population with weather stations
+map <- ggmap(google_map) +
+  geom_sf(data = baltimore_tracts, aes(fill = pct_black), color = "white", size = 0.2, inherit.aes = FALSE) +
+  scale_fill_gradient(low = "#E0BBE4", high = "#4A148C", name = "Percent Black", na.value = "grey50") +
+  geom_sf(data = bsec_stations, aes(color = "BSEC"), size = 1, shape = 21, fill = "red", inherit.aes = FALSE) +
+  geom_sf(data = private_stations, aes(color = "Private"), size = 1, shape = 21, fill = "black", inherit.aes = FALSE) +
+  scale_color_manual(
+    values = c("BSEC" = "red", "Private" = "black"),
+    name = "Station Type",
+    labels = c("BSEC" = "BSEC", "Private" = "Private")
+  ) +
+  labs(
+    title = "Weather Stations and Percentage of Black Population in Baltimore Census Tracts",
+    caption = "Data: ACS 2022, Google Maps, Weather Station Locations"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "bottom",
+    legend.text = element_text(size = 10, face = "bold"),
+    legend.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(size = 15, face = "bold"),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank()
+  )
+
+# Saves the map
+print(map)
+#ggsave("baltimore_black_population_weather_station.png", map, width = 12, height = 10, dpi = 200)
+```

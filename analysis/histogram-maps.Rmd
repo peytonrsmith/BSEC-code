@@ -1,0 +1,240 @@
+---
+  title: "Histogram Calculations for 'Filling the urban measurement desert' paper"
+author:
+  - Peyton Smith
+- Michael Bader
+- Darryn Waugh
+output: html_document
+date: "2025-02-23"
+---
+
+```{r setup}
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(tigris)
+library(ggmap)
+
+theme_set(theme_minimal() +
+  theme(
+    legend.position = "top"
+  )
+)
+```
+
+
+```{r}
+md_tracts <- get_acs(
+  geography = "tract",
+  state = "MD",
+  year = 2022,
+  variables = c(
+    total_population = "B03002_001E",   # Total population
+    black_population = "B03002_004E",   # Black population
+    total_poverty = "B17001_001E",      # Total population for poverty calculation
+    in_poverty = "B17001_002E"          # People below the poverty line
+  ),
+  output = "wide",
+  geometry = TRUE,
+  keep_geo_vars = TRUE
+) %>%
+  mutate(
+    GEOID = as.character(GEOID),
+    pct_black = ifelse(total_population > 0, (black_population / total_population) * 100, NA),
+    pct_poverty = ifelse(total_poverty > 0, (in_poverty / total_poverty) * 100, NA)  
+  ) %>%
+  st_transform(crs = 4326)
+
+baltimore_tracts <- md_tracts %>% 
+  filter(COUNTYFP == "510") %>% 
+  select(GEOID, pct_black, pct_poverty)
+```
+
+```{r}
+## Function to process files with weather station coordinates
+process_file <- function(file_path, i) {
+  dta <- read_csv(file_path) %>% 
+    rename_with(~ str_to_lower(.)) %>% 
+    select(latitude, longitude) %>% 
+    st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>% 
+    mutate(type = i) %>% 
+    st_join(baltimore_tracts)
+}
+
+ws_files <- list(
+  Private = "../data/src/Private Weather Stations in Baltimore Area.csv",
+  BSEC    = "../data/src/BSEC weather stations locations.csv"
+)
+
+ws_coords <- imap(ws_files, process_file)
+
+```
+
+```{r}
+cut_variables <- function(d, v) {
+  pov_cuts <- c(0, 5, 15, 30, 50, 100)
+  pov_labs <- c(
+    "<5%"       = "[0,5)",
+    "5-14.99%"  = "[5,15)",
+    "15-29.99%" = "[15,30)",
+    "30-49.99%" = "[30,50)",
+    "50+%"      = "[50,100]" 
+  )
+  blk_cuts <- c(0, 10, 40, 70, 90, 100)
+  blk_labs <- c(
+    "<10%"      = "[0,10)",
+    "10-39.99%" = "[10,40)",
+    "40-69.99%" = "[40,70)",
+    "70-89.99%" = "[70,90)",
+    "90+%"      = "[90,100]"
+  )
+  d <- d %>% 
+    mutate(
+      cutvar = if_else(
+        {{ v }} == "pct_poverty",
+        cut(value, pov_cuts, right = FALSE, include.lowest = TRUE),
+        cut(value, blk_cuts, right = FALSE, include.lowest = TRUE)
+      ),
+      cat = fct_recode(cutvar, !!!c(pov_labs, blk_labs))
+    )
+}
+
+cut_quintiles <- function(d, v) {
+  quint_poverty <- quantile(
+    baltimore_tracts$pct_poverty, probs = seq(0, 1, .2), na.rm = TRUE
+  )
+  quint_black <- quantile(
+    baltimore_tracts$pct_black, probs = seq(0, 1, .2), na.rm = TRUE
+  )
+  d <- d %>% 
+    mutate(
+      cutvar = if_else(
+        {{ v }} == "pct_poverty",
+        cut(value, quint_poverty, right = FALSE, include.lowest = TRUE),
+        cut(value, quint_black, right = FALSE, include.lowest = TRUE)
+      ),
+      cat = cutvar
+    )
+  d
+}
+
+construct_data <- function(dta, i) {
+  dta <- dta %>% 
+    pivot_longer(cols = starts_with("pct_"), names_to = "dim") %>% 
+    # cut_variables(dim) %>% 
+    cut_quintiles(dim) %>% 
+    filter(!is.na(cat))
+  dta
+}
+
+trt_data <- construct_data(baltimore_tracts) %>% 
+  mutate(type = "Tracts")
+
+ws_data <- map(ws_coords, construct_data) %>% 
+  map(st_drop_geometry) %>% 
+  bind_rows() %>% 
+  bind_rows(trt_data) %>% 
+  group_by(dim, type, cat) %>% 
+  summarize(n = n(), .groups = "drop_last") %>% 
+  mutate(
+    pct = n / sum(n) * 100,
+    type = factor(type, levels = c("Tracts", "BSEC", "Private"))
+  )
+
+write_csv(ws_data, "out/tbl/weather-station-tract-categories.csv")
+
+
+```
+
+```{r}
+dim_names <- c(
+  pct_poverty = "Percent in Poverty",
+  pct_black   = "Percent Non-Hispanic Black"
+)
+plot_histograms <- function(dta, demvar) {
+  nm <- dim_names[demvar]
+  
+  dta %>% 
+    filter(dim == demvar) %>%
+    ggplot(aes(x = type, y = pct, fill = fct_rev(cat))) +
+    geom_bar(stat = "identity", position = "stack") +
+    scale_fill_viridis_d() +
+    guides(fill = guide_legend(reverse = TRUE)) +
+    coord_flip() +
+    labs(
+      title = paste("Distribution of Weather Stations by", nm),
+      y = "Percent of Stations",
+      x = NULL,
+      fill = nm
+    ) +
+    theme(
+      panel.grid.major.y = element_blank()
+    )
+
+}
+
+plot_histograms(ws_data, "pct_poverty") 
+ggsave(
+  "out/img/pct-poverty-stacked-histogram.png", 
+  height = 6, width = 9, units = "in", dpi = 300
+)
+plot_histograms(ws_data, "pct_black")
+ggsave(
+  "out/img/pct-black-stacked-histogram.png", 
+  height = 6, width = 9, units = "in", dpi = 300
+)
+```
+
+```{r}
+# Define the center of the map
+expanded_center <- c(lon = mean(st_coordinates(st_centroid(baltimore_tracts))[, 1]), 
+                     lat = mean(st_coordinates(st_centroid(baltimore_tracts))[, 2]))
+
+# Get Google Maps street view background
+google_map <- get_googlemap(
+  center = expanded_center,
+  zoom = 11,
+  maptype = "roadmap"
+)
+
+ws_points <- bind_rows(ws_coords) %>% 
+  bind_cols(st_coordinates(.)) %>% 
+  rename(lon = X, lat = Y)
+
+ggmap(google_map) +
+  geom_sf(
+    data = baltimore_tracts,
+    mapping = aes(fill = pct_black),
+    color = "white", size = 0.2, inherit.aes = FALSE
+  ) +
+  scale_fill_gradient(
+    low = "#E0BBE4", high = "#4A148C", name = "Percent Black", na.value = "grey50"
+  ) +
+  geom_sf(
+    data = ws_points,
+    mapping = aes(color = type)
+  ) +
+  scale_color_manual(values = c("red", "black"), name = "Station type") +
+    labs(
+      fill = "Station type",
+      title = "Weather Stations and Percentage of Black Population in Baltimore Census Tracts",
+      caption = "Data: ACS 2022, Google Maps, Weather Station Locations"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "bottom",
+    legend.text = element_text(size = 10, face = "bold"),
+    legend.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(size = 11, face = "bold"),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank()
+  )
+
+
+
+
+
+
+```
+
